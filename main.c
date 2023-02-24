@@ -70,6 +70,7 @@
 #include "tms_util.h"
 #include "emu2149.h"
 #include "z80.h"
+#include "nabu_fdc.h"
 
 /* Cable modem include */
 #include "modem.h"
@@ -125,6 +126,7 @@ int romsize;
 z80 cpu;
 VrEmuTms9918 *vdp;
 PSG *psg;
+fdc_context_t fdc;
 int ctrlreg;
 
 int gotmodem;
@@ -226,6 +228,7 @@ void mem_write(void *blob, uint16_t addr, uint8_t val)
  * A0 - TMS9918 read/write data
  * A1 - TMS9918 write control register
  * B0 - parallel port data
+ * CX - NABU floppy controller
  *
  * Control reg:
  * 01 - ROM disable
@@ -402,6 +405,11 @@ uint8_t psg_reg_address = 0x00;
 uint8_t port_read(z80 *mycpu, uint8_t port)
 {
   uint8_t t, b;
+  
+  // The FDC uses a span of 16 registers, therefor it is not
+  // appropriate to use the switch
+  if (port >= 0xC0 && port < 0xD0)
+	return fdc_read(&fdc, port - 0xC0);
 
   switch (port)
   {
@@ -451,6 +459,14 @@ uint8_t port_read(z80 *mycpu, uint8_t port)
 void port_write(z80 *mycpu, uint8_t port, uint8_t val)
 {
   uint8_t psg_reg7;
+  
+  // The FDC uses a span of 16 registers, therefor it is not
+  // appropriate to use the switch
+  if (port >= 0xC0 && port < 0xD0) {
+	fdc_write(&fdc, port - 0xC0, val);
+	return;
+  }
+  
   switch (port)
   {
   case 0x00:
@@ -1590,7 +1606,7 @@ int main(int argc, char **argv)
   int e;
 
   char *bios;
-  char *server, *port;
+  char *server, *port, *dska, *dskb;
   int scanline;
   int noinitmodem;
   int dojoy;
@@ -1609,13 +1625,14 @@ int main(int argc, char **argv)
   noinitmodem=0;
   dog_speed=58000;
   lpt=NULL;
+  dska = dskb = NULL;
 
   /* This is still relevant for MS-DOS, thank you Watt-32 */
   server = "127.0.0.1";
   port = "5816";
   
   bios = ROMFILE1;
-  while (-1 != (e = getopt(argc, argv, "48B:jJS:P:Np:")))
+  while (-1 != (e = getopt(argc, argv, "48B:jJS:P:Np:a:b")))
   {
     switch (e)
     {
@@ -1647,10 +1664,16 @@ int main(int argc, char **argv)
       if (lpt) fclose(lpt); /* in case multiple times specified */
       lpt=fopen(optarg, "wb");
       break;
+    case 'a':
+	  dska = optarg;
+	  break;
+	case 'b':
+	  dskb = optarg;
+	  break;
     default:
       fprintf(stderr, 
               "usage: %s [-4 | 8 | -B filename] [-S server] [-P port]"
-              " [-p file]\n",
+              " [-p file] [-a disk image] [-b disk image]\n",
               argv[0]);
       return 1;
     }
@@ -1824,6 +1847,19 @@ int main(int argc, char **argv)
     fprintf(stderr, "Modem will not be available.\n");
   }
   gotmodem = !e;
+  
+  /* 
+   * Begin NABU FDC emulation
+   *
+   * Init FDC subsystem, and attach disks
+   */
+  fdc_init(&fdc);
+  if (dska) {
+	fdc_attach(&fdc, dska, 0);
+  }
+  if (dskb) {
+	fdc_attach(&fdc, dskb, 1);
+  }
 
   /*
    * The first thing the ROM does is initialize the control register, which
