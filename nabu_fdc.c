@@ -35,7 +35,8 @@ void fdc_init(fdc_context_t *fd)
 	}
 	
 	// Reset registers
-	fd->command = fd->status = fd->track = fd->sector = 0;
+	fd->curr = fd->command = fd->status = fd->track = fd->sector = 0;
+	fd->dir = 1;
 }
 
 /*
@@ -105,6 +106,26 @@ char fdc_attach(fdc_context_t *fd, char *fname, int unit)
 }
 
 /*
+ * Executes a step
+ *
+ * fd = Pointer to FDC context object
+ * disk = Pointer to disk object
+ * u = Update track register
+ */
+void fdc_step(fdc_context_t *fd, fdc_disk_t *disk, char u)
+{
+	if (u)
+		fd->track += fd->dir;
+	disk->track += fd->dir;
+	
+	// check for invalid track positions
+	if (disk->track < 0)
+		disk->track = 0;
+	if (disk->track >= disk->track_count)
+		disk->track = disk->track_count - 1;
+}
+
+/*
  * Executes an FDC command
  *
  * fd = Pointer to FDC context object
@@ -112,17 +133,68 @@ char fdc_attach(fdc_context_t *fd, char *fname, int unit)
  */
 void fdc_command(fdc_context_t *fd, uint8_t data)
 {
+	int opcode, sec;
+	fdc_disk_t *disk;
 	
-}
+	// Get disk information
+	disk = fd->disk[fd->curr];
+	sec = fd->sector % disk->sec_count;
+	
+	fd->command = data;
+	opcode = (data & 0xE0) >> 5;
+	switch (opcode) {
+		case 0:
+			// Restore / Seek
+			if (data & 0x10) {
+				// Seek
+				if (disk->track > fd->track)
+					fd->dir = 1;
+				if (disk->track < fd->track)
+					fd->dir = -1;
+				
+				disk->track = fd->track;
+				
+			} else {
+				// Restore
+				disk->track = 0;
+				fd->track = 0;
+			}
+			break;
+			
+		case 1:
+			// Step
+			fdc_step(fd, disk, data & 0x10);
+			break;
+			
+		case 2:
+			// Step in
+			fd->dir = 1;
+			fdc_step(fd, disk, data & 0x10);
+			break;
+			
+		case 3:
+			// Step out
+			fd->dir = -1;
+			fdc_step(fd, disk, data & 0x10);
+			break;
+			
+		case 4:
+			// Read sector
+			fd->sec_data = disk->data + (disk->track * disk->sec_size * disk->sec_count) + (sec * disk->sec_size);
+			fd->sec_index = 0;
+			fd->sec_size = disk->sec_size;
+			break;
+			
+		case 5:
+			// Write sector
+			fd->sec_data = disk->data + (disk->track * disk->sec_size * disk->sec_count) + (sec * disk->sec_size);
+			fd->sec_index = 0;
+			fd->sec_size = disk->sec_size;
+			break;
 
-/*
- * Returns FDC status
- *
- * fd = Pointer to FDC context object
- */
-uint8_t fdc_status(fdc_context_t *fd)
-{
-	
+		default:
+			break;
+	}
 }
 
 /*
@@ -199,11 +271,11 @@ void fdc_write(fdc_context_t *fd, uint8_t address, uint8_t data)
  * address = I/O address
  * Returns data
  */
-void fdc_write(fdc_context_t *fd, uint8_t address)
+uint8_t fdc_read(fdc_context_t *fd, uint8_t address)
 {
 	switch (address) {
 		case 0x0:
-			return fdc_status(fd);
+			return fd->status;
 			
 		case 0x1:
 			return fd->track;

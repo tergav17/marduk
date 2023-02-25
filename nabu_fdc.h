@@ -39,7 +39,19 @@ typedef struct {
 	uint8_t command;
 	uint8_t status;
 	uint8_t track;
+	
 	uint8_t sector;
+	
+	// Currently selected drive
+	int curr;
+	
+	// Last step direction
+	int dir;
+	
+	// Sector access information
+	uint8_t *sec_data;
+	int sec_index;
+	int sec_size;
 
 } fdc_context_t;
 
